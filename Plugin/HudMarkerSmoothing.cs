@@ -78,6 +78,17 @@ namespace SmoothFrames
 		// TryComputeScreenPoint or the end of the marker draw.
 		[ThreadStatic] private static MarkerContext _currentContext;
 
+		// True only while MyHudMarkerRender.Draw is on the stack (set by
+		// PatchMyHudMarkerRenderDraw). TryComputeScreenPoint is a general
+		// world→screen helper the engine also calls outside Draw — e.g. to
+		// project a grid target reticule — and the context it sets is only
+		// cleared by Draw's postfix. Honoring an out-of-Draw call would leave a
+		// marker context active when unrelated HUD (the toolbar) is drawn next,
+		// tagging its sprites and Swapping them onto the smoothed marker
+		// position. PatchTryComputeScreenPoint sets context only within this
+		// scope.
+		[ThreadStatic] internal static bool InMarkerDraw;
+
 		// Sim thread populates from MyRenderProxy.EnqueueMessage postfix while
 		// a marker context is set; render thread reads (and mutates) in the
 		// per-render-frame refresh path. Entries are not removed on read —
@@ -693,6 +704,16 @@ namespace SmoothFrames
 	{
 		public static void Postfix(Vector3D worldPosition, Vector2 projectedPoint2D, bool isBehind, bool __result)
 		{
+			// Only project markers drawn from within MyHudMarkerRender.Draw.
+			// Out-of-Draw callers (grid target reticule, etc.) would otherwise
+			// leak this context onto the next HUD emission. Clear any stale
+			// context so a leaked one can't survive into the toolbar draw.
+			if (!HudMarkerSmoothing.InMarkerDraw)
+			{
+				HudMarkerSmoothing.ClearContext();
+				return;
+			}
+
 			if (!__result || isBehind)
 			{
 				HudMarkerSmoothing.ClearContext();
@@ -743,8 +764,14 @@ namespace SmoothFrames
 	[HarmonyPatch(typeof(MyHudMarkerRender), "Draw")]
 	public static class PatchMyHudMarkerRenderDraw
 	{
+		public static void Prefix()
+		{
+			HudMarkerSmoothing.InMarkerDraw = true;
+		}
+
 		public static void Postfix()
 		{
+			HudMarkerSmoothing.InMarkerDraw = false;
 			HudMarkerSmoothing.ClearContext();
 		}
 	}
